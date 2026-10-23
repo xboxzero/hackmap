@@ -16,6 +16,12 @@ header h1{font-size:15px;margin:0;letter-spacing:.12em;color:var(--acc)}
 .live{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px;animation:p 1.2s infinite}
 @keyframes p{50%{opacity:.2}}
 #map{height:100%;background:#05080d}
+#hud{position:absolute;left:10px;bottom:10px;display:flex;gap:6px;align-items:center;background:#0d1420cc;border:1px solid var(--line);border-radius:8px;padding:5px 8px;z-index:5}
+#hud button{background:#060a11;border:1px solid var(--line);color:var(--acc);width:28px;height:28px;border-radius:6px;font:16px monospace;cursor:pointer}
+#hudTxt{color:var(--dim);font-size:11.5px}
+.card{background:#0a111c;border:1px solid var(--acc2);border-radius:8px;padding:10px;margin:10px 0}
+.chk label{display:block;padding:2px 0;cursor:pointer}.chk input[type=checkbox]{width:auto;margin-right:6px}
+.res{padding:5px 6px;border-bottom:1px solid var(--line);cursor:pointer}.res:hover{background:#122033}
 aside{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
 nav{display:flex;border-bottom:1px solid var(--line)}
 nav button{flex:1;background:none;border:0;color:var(--dim);padding:10px 4px;cursor:pointer;font:inherit;border-bottom:2px solid transparent}
@@ -54,15 +60,42 @@ button.go{cursor:pointer;color:var(--acc);margin-top:6px}
   <button class="go" id="btnLoc" style="margin:0">Use precise GPS location</button>
   <button class="go" id="btnSpin" style="margin:0">Auto-rotate: on</button>
 </header>
-<div id="map"></div>
+<div id="mapWrap" style="position:relative;min-height:0"><div id="map"></div><div id="hud"><button id="zIn">+</button><button id="zOut">−</button><span id="hudTxt"></span></div></div>
 <aside>
   <nav>
-    <button data-t="route" class="on">Route</button>
+    <button data-t="layers" class="on">Layers</button>
+    <button data-t="route">Route</button>
     <button data-t="signal">Signal</button>
     <button data-t="sec">Security</button>
     <button data-t="infra">Infra</button>
   </nav>
-  <section id="t-route" class="on">
+  <section id="t-layers" class="on">
+    <input id="q" placeholder="Search company, cable or city (e.g. Equinix, 2Africa, Marseille)" spellcheck="false">
+    <div id="qRes"></div>
+    <div id="card" class="card" style="display:none"></div>
+    <h2>Layers</h2>
+    <div id="layerChk" class="chk">
+      <label><input type="checkbox" data-l="cables" checked> <span style="color:#22d3ee">━</span> Submarine cables</label>
+      <label><input type="checkbox" data-l="landing" checked> <span style="color:#22d3ee">●</span> Cable landing stations</label>
+      <label><input type="checkbox" data-l="fac" checked> <span style="color:#a78bfa">●</span> Data centres / exchanges</label>
+      <label><input type="checkbox" data-l="tower" checked> <span style="color:#ffc233">●</span> Cell towers (zoom in)</label>
+      <label><input type="checkbox" data-l="edge" checked> <span style="color:#f6821f">●</span> Cloudflare edge sites</label>
+      <label>Basemap <select id="basemap"><option value="dark">Dark map (detailed)</option><option value="sat">Satellite</option><option value="night">Night lights</option></select></label>
+    </div>
+    <div class="dim" id="dataInfo">loading data...</div>
+    <h2>Trace a path across the physical internet</h2>
+    <select id="dest"></select> <button class="go" id="simGo">Show path</button> <button class="go" id="simClear">Clear</button>
+    <div id="simOut" style="margin-top:8px"></div>
+    <h2>How the internet physically works</h2>
+    <div class="note"><b>1. Radio:</b> your phone talks to a <span style="color:#ffc233">cell tower</span> (or Wi-Fi router).<br>
+    <b>2. Access fibre:</b> the tower is wired to your ISP's network.<br>
+    <b>3. Data centre / exchange:</b> ISPs, clouds and CDNs physically interconnect in buildings like <span style="color:#a78bfa">Equinix or Telehouse</span>. Traffic is handed over via BGP routing.<br>
+    <b>4. Landing station:</b> long-haul fibre reaches the coast at a <span style="color:#22d3ee">cable landing station</span>.<br>
+    <b>5. Submarine cable:</b> light pulses in fibre pairs cross the ocean, boosted by repeaters about every 50-100 km. About 99% of intercontinental traffic uses these cables, owned by consortia of telecoms and tech companies.<br>
+    <b>6. Repeat in reverse</b> at the other end until the destination server answers.</div>
+    <div class="note">Cables and landings: TeleGeography Submarine Cable Map (CC BY-NC-SA 3.0, non-commercial). Data centres: PeeringDB. Towers: OpenStreetMap contributors. Basemaps: Esri, HERE, Garmin, OpenStreetMap contributors.</div>
+  </section>
+  <section id="t-route">
     <h2>Live route to targets</h2>
     <table id="routeTbl"><tr><th>Target</th><th>RTT</th><th>Jitter</th><th>Loss</th><th></th></tr></table>
     <h2>Path hops (selected)</h2>
@@ -139,7 +172,7 @@ $('btnSpin').onclick=()=>{const c=G.controls();c.autoRotate=!c.autoRotate;$('btn
 mapEl.addEventListener('pointerdown',()=>{G.controls().autoRotate=false;$('btnSpin').textContent='Auto-rotate: off'});
 let rings=[];
 function pulse(lat,lng,color='#38bdf8',r=6){const o={lat,lng,color,r};rings.push(o);G.ringsData(rings);setTimeout(()=>{rings=rings.filter(x=>x!==o);G.ringsData(rings)},2600)}
-const fly=(lat,lng,alt=1.8)=>G.pointOfView({lat,lng,altitude:alt},1200);
+const fly=(lat,lng,alt=1.8)=>{G.pointOfView({lat,lng,altitude:alt},1200);setTimeout(()=>scheduleView(),1350)};
 
 /* Cloudflare edge sites (IATA -> lat,lon), the ones a visitor is most likely to hit */
 const COLO={AMS:[52.31,4.76],ATL:[33.64,-84.43],BKK:[13.69,100.75],BOM:[19.09,72.87],BOS:[42.36,-71.01],BRU:[50.9,4.48],CDG:[49.01,2.55],CGK:[-6.13,106.66],CPH:[55.62,12.65],DEL:[28.56,77.1],DEN:[39.86,-104.67],DFW:[32.9,-97.04],DUB:[53.42,-6.27],DXB:[25.25,55.36],EWR:[40.69,-74.17],FRA:[50.04,8.56],GRU:[-23.43,-46.47],HKG:[22.31,113.91],HND:[35.55,139.78],IAD:[38.95,-77.45],ICN:[37.46,126.44],IST:[41.26,28.74],JNB:[-26.14,28.25],KUL:[2.74,101.7],LAX:[33.94,-118.41],LHR:[51.47,-0.45],MAD:[40.47,-3.56],MAN:[53.35,-2.27],MEL:[-37.67,144.84],MIA:[25.79,-80.29],MNL:[14.51,121.02],MRS:[43.44,5.22],MUC:[48.35,11.79],NRT:[35.77,140.39],ORD:[41.98,-87.9],OSL:[60.19,11.1],PER:[-31.94,115.97],SEA:[47.45,-122.31],SIN:[1.36,103.99],SJC:[37.36,-121.93],SYD:[-33.95,151.18],TPE:[25.08,121.23],VIE:[48.11,16.57],WAW:[52.17,20.97],YYZ:[43.68,-79.63],ZRH:[47.46,8.55],SCL:[-33.39,-70.79],MXP:[45.63,8.72],ARN:[59.65,17.93],HEL:[60.32,24.96],KIX:[34.43,135.23],CMB:[7.18,79.88],CCU:[22.65,88.45],MAA:[12.99,80.17],BLR:[13.2,77.71],HYD:[17.24,78.43],LOS:[6.58,3.32],NBO:[-1.32,36.93],CAI:[30.12,31.4],DOH:[25.27,51.61]};
@@ -154,6 +187,187 @@ const TARGETS=[
  {name:'Wikipedia',host:'en.wikipedia.org',url:'https://en.wikipedia.org/w/api.php?action=query&meta=siteinfo&format=json&origin=*',color:'#38bdf8'}
 ];
 TARGETS.forEach(t=>{t.rtts=[];t.lost=0;t.sent=0;t.pos=null;t.ip=null;t.last=null;t.line=null});
+
+/* ---------- infrastructure layers: submarine cables, landing stations, data centres, cell towers ---------- */
+const LY={cables:true,landing:true,fac:true,tower:true,edge:true};
+const D={meta:null,paths:[],landing:[],facs:[],lpById:{},lpCables:{}};
+let selCable=null,cStroke=.2;
+const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/';
+const BASEMAPS={dark:(x,y,l)=>`${ESRI}Canvas/World_Dark_Gray_Base/MapServer/tile/${l}/${y}/${x}`,sat:(x,y,l)=>`${ESRI}World_Imagery/MapServer/tile/${l}/${y}/${x}`,night:null};
+G.globeTileEngineUrl(BASEMAPS.dark);
+G.pathsData([]).pathPoints('pts').pathPointLat(p=>p[1]).pathPointLng(p=>p[0])
+  .pathColor(d=>d.id===selCable?'#ffffff':d.color).pathStroke(d=>d.id===selCable?cStroke*3:cStroke)
+  .pathDashLength(d=>d.id===selCable?.05:1).pathDashGap(d=>d.id===selCable?.03:0).pathDashAnimateTime(d=>d.id===selCable?3500:0)
+  .pathTransitionDuration(0)
+  .pathLabel(d=>{const m=D.meta[d.id];return `<div class="gtip"><b>${esc(m.n)}</b>${m.plan?' (planned)':''}<br>${esc(m.len||'')} · RFS ${esc(m.rfs||'?')}<br>${esc(m.own||'')}<br><i>click for details</i></div>`})
+  .onPathClick(d=>selectCable(d.id)).onPointClick(d=>d.pick&&d.pick());
+G.labelLat(d=>d.lat).labelLng(d=>d.lng).labelText(d=>d.text||' ').labelColor('color').labelDotRadius('size')
+  .labelSize(d=>d.tsize||.0001).labelAltitude(.0004).labelResolution(2).labelsTransitionDuration(0)
+  .labelLabel(d=>`<div class="gtip">${d.label}</div>`).onLabelClick(d=>d.pick&&d.pick());
+const ctl=G.controls();ctl.minDistance=100.4;ctl.maxDistance=700;ctl.zoomSpeed=1.4;
+const angDist=(a,b,c,d)=>{const r=Math.PI/180,x=Math.sin((c-a)*r/2)**2+Math.cos(a*r)*Math.cos(c*r)*Math.sin((d-b)*r/2)**2;return 2*Math.asin(Math.min(1,Math.sqrt(x)))/r};
+function zoomBy(f){const p=G.pointOfView();G.pointOfView({altitude:Math.max(.005,Math.min(6,p.altitude*f))},500);setTimeout(()=>scheduleView(),650)}
+$('zIn').onclick=()=>zoomBy(.5);$('zOut').onclick=()=>zoomBy(2);
+function hud(msg){const p=G.pointOfView();$('hudTxt').textContent=`alt ${(p.altitude*6371).toFixed(0)} km · ${p.lat.toFixed(1)}, ${p.lng.toFixed(1)}${msg?' · '+msg:''}`}
+
+async function loadData(){
+  try{
+    const [c,f]=await Promise.all([fetch('data/cables.json').then(r=>r.json()),fetch('data/facilities.json').then(r=>r.json())]);
+    D.meta=c.meta;D.landing=c.landing;D.facs=f;
+    c.cables.forEach(cb=>cb.p.forEach(seg=>D.paths.push({id:cb.id,pts:seg,color:cb.c||'#888'})));
+    c.landing.forEach(l=>D.lpById[l.id]=l);
+    Object.entries(c.meta).forEach(([id,m])=>m.lps.forEach(l=>(D.lpCables[l]=D.lpCables[l]||[]).push(id)));
+    $('dataInfo').textContent=`${Object.keys(c.meta).length} cables · ${c.landing.length} landing stations · ${f.length} data centres loaded`;
+    renderCables();refreshView();
+  }catch(e){$('dataInfo').innerHTML='<span class="bad">data load failed: '+esc(e.message)+'</span>'}
+}
+const renderCables=()=>G.pathsData(LY.cables?D.paths.slice():[]);
+
+/* viewport culling: only draw points near the camera, more of them as you zoom in */
+let viewT;function scheduleView(){clearTimeout(viewT);viewT=setTimeout(()=>{refreshView();loadTowers()},300)}
+ctl.addEventListener('change',()=>{const a=G.pointOfView().altitude;ctl.rotateSpeed=Math.max(.03,Math.min(1.2,a*.9));hud();scheduleView()});
+function refreshView(){
+  const pov=G.pointOfView(),alt=pov.altitude;
+  const maxAng=alt>2?180:alt>1?85:alt>.5?55:alt>.2?30:alt>.08?15:6;
+  const vis=(la,lo)=>angDist(pov.lat,pov.lng,la,lo)<=maxAng;
+  const size=Math.max(.008,Math.min(.22,alt*.12));const out=[];
+  const cs=Math.max(.015,Math.min(.2,alt*.1));if(Math.abs(cs-cStroke)>cStroke*.25){cStroke=cs;renderCables()}
+  if(LY.fac)D.facs.filter(f=>vis(f.y,f.x)).sort((a,b)=>(b.nets||0)-(a.nets||0)).slice(0,alt>1.2?800:2500).forEach(f=>
+    out.push({lat:f.y,lng:f.x,color:'#a78bfa',size:size*(1+Math.min(.8,(f.nets||0)/500)),alt:0,name:f.o||f.n,label:`<b>${esc(f.o||'')}</b><br>${esc(f.n)}<br>${esc(f.c||'')}, ${esc(f.k||'')}<br>${f.nets||0} networks · ${f.ix||0} IXs`,pick:()=>showFac(f)}));
+  if(LY.landing)D.landing.filter(l=>vis(l.y,l.x)).forEach(l=>
+    out.push({lat:l.y,lng:l.x,color:'#22d3ee',size:size*.9,alt:0,name:l.n,label:`<b>Cable landing station</b><br>${esc(l.n)}<br>${(D.lpCables[l.id]||[]).length} cables`,pick:()=>showLanding(l)}));
+  if(alt<.06){const tsz=Math.max(.003,alt*.045);out.filter(p=>p.name).slice(0,60).forEach(p=>{p.text=p.name;p.tsize=tsz})}
+  S.layerPts=out;renderAll();hud();
+}
+function renderAll(){
+  G.arcsData((S.routeArcs||[]).concat(S.simArcs||[])).pointsData((S.routePts||[]).concat(LY.edge?S.infraPts:[]))
+   .labelsData((S.layerPts||[]).concat(LY.tower?S.towerPts||[]:[]));
+}
+
+/* cell towers / masts from OpenStreetMap for the area on screen (only when zoomed in) */
+let towerCtl=null,lastTQ=null;
+async function overpass(q,ms=25000){
+  for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
+    try{const r=await fetchT(ep,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'content-type':'application/x-www-form-urlencoded'}},ms);return (await r.json()).elements||[]}catch(e){}}
+  throw new Error('Overpass unavailable');
+}
+const towerQ=(lat,lon,R)=>`[out:json][timeout:20];(nwr(around:${R},${lat},${lon})["man_made"~"^(mast|tower)$"]["tower:type"="communication"];nwr(around:${R},${lat},${lon})["man_made"="communications_tower"];nwr(around:${R},${lat},${lon})["communication:mobile_phone"="yes"];);out center 500;`;
+function towerPoint(e){const p=e.center?[e.center.lat,e.center.lon]:[e.lat,e.lon];if(p[0]==null)return null;const t=e.tags||{};
+  const cell=t['communication:mobile_phone']==='yes'||/mobile|cell/i.test(t['tower:type']||'')||t.operator;
+  return {lat:p[0],lng:p[1],color:cell?'#ffc233':'#94a3b8',size:.03,alt:.004,tags:t,osm:e.type+'/'+e.id,
+    label:`<b>${esc(t.operator||t.name||'Communication tower')}</b><br>${cell?'mobile/cell site':'communication mast'}${t.height?'<br>height '+esc(t.height)+' m':''}`,pick(){showTower(this)}}}
+async function loadTowers(){
+  const pov=G.pointOfView();
+  if(!LY.tower){S.towerPts=[];renderAll();return}
+  if(pov.altitude>.12){if(S.towerPts&&S.towerPts.length){S.towerPts=[];renderAll()}hud('zoom closer than ~700 km for cell towers');return}
+  const R=Math.round(Math.max(4,Math.min(25,pov.altitude*160)))*1000;
+  if(lastTQ&&angDist(lastTQ.lat,lastTQ.lng,pov.lat,pov.lng)*111<R/1000*.4&&lastTQ.R>=R)return;
+  lastTQ={lat:pov.lat,lng:pov.lng,R};hud('loading cell towers...');
+  try{const els=await overpass(towerQ(pov.lat.toFixed(4),pov.lng.toFixed(4),R));
+    S.towerPts=els.map(towerPoint).filter(Boolean).map(p=>{const z=Math.max(.004,Math.min(.04,pov.altitude*.3));return {...p,size:z,alt:z*.02}});
+    renderAll();hud(S.towerPts.length+' towers/masts (OpenStreetMap)')}
+  catch(e){lastTQ=null;hud('tower data unavailable')}
+}
+
+/* info cards */
+const card=$('card');
+const link=u=>{try{const x=new URL(u);return /^https?:$/.test(x.protocol)?`<a href="${esc(x.href)}" target="_blank" rel="noopener" style="color:var(--acc)">${esc(x.hostname)}</a>`:''}catch(e){return ''}};
+function openCard(html){card.innerHTML=html;card.style.display='block';document.querySelector('nav button[data-t=layers]').click();card.scrollIntoView({block:'nearest'})}
+const flyBtn=(la,lo,a)=>`<button class="go" onclick="fly(${la},${lo},${a})">Fly here</button>`;
+function selectCable(id){
+  const m=D.meta[id];if(!m)return;selCable=id;renderCables();
+  const lps=m.lps.map(l=>D.lpById[l]).filter(Boolean);
+  openCard(`<h2>Submarine cable</h2><b style="font-size:15px">${esc(m.n)}</b>${m.plan?' <span class="warn">(planned)</span>':''}
+   <table><tr><td class="dim">Length</td><td>${esc(m.len||'?')}</td></tr><tr><td class="dim">Ready for service</td><td>${esc(m.rfs||'?')}</td></tr>
+   <tr><td class="dim">Owners (companies)</td><td>${esc(m.own||'?')}</td></tr><tr><td class="dim">Supplier</td><td>${esc(m.sup||'?')}</td></tr>
+   <tr><td class="dim">Website</td><td>${m.url?link(m.url):'-'}</td></tr></table>
+   <h2>Landing stations (${lps.length})</h2><div>${lps.map(l=>`<a href="#" data-lp="${esc(l.id)}" style="color:var(--acc2)">${esc(l.n)}</a>`).join(' · ')}</div>
+   <div class="note">Owners are the consortium members who hold capacity. Source: TeleGeography Submarine Cable Map.</div>`);
+  const f=D.paths.find(p=>p.id===id);if(f)fly(f.pts[Math.floor(f.pts.length/2)][1],f.pts[Math.floor(f.pts.length/2)][0],1.3);
+  card.querySelectorAll('[data-lp]').forEach(a=>a.onclick=e=>{e.preventDefault();showLanding(D.lpById[a.dataset.lp])});
+}
+function showLanding(l){
+  const cs=(D.lpCables[l.id]||[]).map(id=>D.meta[id]).filter(Boolean);
+  openCard(`<h2>Cable landing station</h2><b style="font-size:15px">${esc(l.n)}</b>${flyBtn(l.y,l.x,.25)}
+   <div class="dim">Where submarine cables come ashore and connect to terrestrial networks.</div>
+   <table><tr><th>Cable</th><th>Owners</th></tr>${cs.map(m=>`<tr><td><a href="#" data-c="${esc(Object.keys(D.meta).find(k=>D.meta[k]===m))}" style="color:var(--acc2)">${esc(m.n)}</a></td><td class="dim">${esc(m.own||'')}</td></tr>`).join('')}</table>`);
+  card.querySelectorAll('[data-c]').forEach(a=>a.onclick=e=>{e.preventDefault();selectCable(a.dataset.c)});fly(l.y,l.x,.4);
+}
+function showFac(f){
+  openCard(`<h2>Data centre / interconnection facility</h2><b style="font-size:15px">${esc(f.o||'')}</b><br>${esc(f.n)}${flyBtn(f.y,f.x,.05)}
+   <table><tr><td class="dim">Address</td><td>${esc(f.a||'')} ${esc(f.c||'')}, ${esc(f.k||'')}</td></tr>
+   <tr><td class="dim">Networks present</td><td>${f.nets||0}</td></tr><tr><td class="dim">Internet exchanges</td><td>${f.ix||0}</td></tr><tr><td class="dim">Carriers</td><td>${f.car||0}</td></tr>
+   <tr><td class="dim">Website</td><td>${f.w?link(f.w):'-'}</td></tr></table>
+   <div class="note">Networks (ISPs, clouds, CDNs) physically connect to each other inside buildings like this. Source: PeeringDB.</div>`);
+}
+function showTower(t){
+  const g=t.tags||{};const rows=Object.entries(g).filter(([k])=>/^(operator|name|ref|height|tower:type|tower:construction|communication:.*|network|brand|man_made)$/.test(k));
+  openCard(`<h2>Cell tower / mast</h2><b style="font-size:15px">${esc(g.operator||g.name||'Unnamed mast')}</b>${flyBtn(t.lat,t.lng,.01)}
+   <table>${rows.map(([k,v])=>`<tr><td class="dim">${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
+   <a href="https://www.openstreetmap.org/${esc(t.osm)}" target="_blank" rel="noopener" style="color:var(--acc)">view on OpenStreetMap</a>
+   <div class="note">Crowd-mapped data: coverage and operator tags vary by country. Carriers do not publish complete tower lists.</div>`);
+}
+
+/* search by company / cable / place */
+$('q').oninput=()=>{
+  const q=$('q').value.trim().toLowerCase();const el=$('qRes');if(q.length<2||!D.meta){el.innerHTML='';return}
+  const r=[];
+  Object.entries(D.meta).forEach(([id,m])=>{if((m.n+' '+(m.own||'')).toLowerCase().includes(q))r.push({t:'cable',k:id,l:m.n,s:(m.own||'').slice(0,60)})});
+  D.landing.forEach(l=>{if(l.n.toLowerCase().includes(q))r.push({t:'landing',k:l.id,l:l.n,s:'landing station'})});
+  D.facs.forEach(f=>{if(((f.o||'')+' '+f.n+' '+(f.c||'')).toLowerCase().includes(q))r.push({t:'dc',k:f,l:(f.o||'')+' - '+f.n,s:(f.c||'')+', '+(f.k||'')})});
+  el.innerHTML=r.slice(0,14).map((x,i)=>`<div class="res" data-i="${i}"><span class="dim">${x.t}</span> ${esc(x.l)}<br><span class="dim">${esc(x.s)}</span></div>`).join('')+(r.length>14?`<div class="dim">+${r.length-14} more</div>`:'');
+  el.querySelectorAll('.res').forEach(d=>d.onclick=()=>{const x=r[+d.dataset.i];x.t==='cable'?selectCable(x.k):x.t==='landing'?showLanding(D.lpById[x.k]):(showFac(x.k),fly(x.k.y,x.k.x,.08))});
+};
+$('basemap').onchange=e=>G.globeTileEngineUrl(BASEMAPS[e.target.value]);
+document.querySelectorAll('#layerChk input').forEach(i=>i.onchange=()=>{LY[i.dataset.l]=i.checked;
+  if(i.dataset.l==='cables')renderCables();if(i.dataset.l==='tower'){lastTQ=null;loadTowers()}refreshView()});
+
+/* illustrative end-to-end path: you -> tower -> data centre -> cable landing -> cable -> landing -> data centre -> destination */
+const DEST={'London':[51.51,-0.13],'Frankfurt':[50.11,8.68],'New York':[40.71,-74.0],'Los Angeles':[34.05,-118.24],'São Paulo':[-23.55,-46.63],'Johannesburg':[-26.2,28.05],'Mumbai':[19.08,72.88],'Singapore':[1.35,103.82],'Tokyo':[35.68,139.69],'Sydney':[-33.87,151.21],'Dubai':[25.2,55.27]};
+Object.keys(DEST).forEach(k=>$('dest').add(new Option(k,k)));
+const nearest=(arr,lat,lon,get)=>arr.reduce((b,x)=>{const [y,w]=get(x);const d=hav(lat,lon,y,w);return d<b.d?{x,d}:b},{x:null,d:1e9});
+let graph=null;
+function buildGraph(){
+  graph={};const add=(a,b,w,c)=>{(graph[a]=graph[a]||[]).push({to:b,w,c})};
+  Object.entries(D.meta).forEach(([id,m])=>{if(m.plan)return;const ls=m.lps.map(l=>D.lpById[l]).filter(Boolean);
+    for(let i=0;i<ls.length;i++)for(let j=i+1;j<ls.length;j++){const w=hav(ls[i].y,ls[i].x,ls[j].y,ls[j].x)*1.15+300;add(ls[i].id,ls[j].id,w,id);add(ls[j].id,ls[i].id,w,id)}});
+}
+function route(from,to){
+  if(!graph)buildGraph();
+  const near=(p)=>D.landing.map(l=>({l,d:hav(p[0],p[1],l.y,l.x)})).sort((a,b)=>a.d-b.d).slice(0,4);
+  const g={...graph};const add=(a,b,w,c)=>{g[a]=(g[a]||[]).concat([{to:b,w,c}])};
+  near(from).forEach(n=>add('S',n.l.id,n.d*1.5,null));near(to).forEach(n=>add(n.l.id,'E',n.d*1.5,null));
+  const dd=hav(from[0],from[1],to[0],to[1]);if(dd<3000)add('S','E',dd*1.6,null);
+  const dist={S:0},prev={},done=new Set();
+  for(;;){let u=null,best=1e18;for(const k in dist)if(!done.has(k)&&dist[k]<best){best=dist[k];u=k}
+    if(u===null||u==='E')break;done.add(u);for(const e of g[u]||[]){const nd=dist[u]+e.w;if(nd<(dist[e.to]??1e18)){dist[e.to]=nd;prev[e.to]={u,c:e.c}}}}
+  if(dist.E==null)return null;const seq=[];for(let k='E';k!=='S';k=prev[k].u)seq.unshift({id:k,via:prev[k].c});return seq;
+}
+async function simulate(){
+  const out=$('simOut');if(!S.me||!D.meta){out.textContent='Waiting for your location / data...';return}
+  const name=$('dest').value,to=DEST[name],me=[S.me.lat,S.me.lon];
+  out.textContent='computing...';
+  const seq=route(me,to);if(!seq){out.textContent='No path found';return}
+  const nodes=[{t:'You',n:S.me.ip,co:S.me.org,p:me,m:''}];
+  let tw=(S.towerPts||[]).filter(t=>hav(me[0],me[1],t.lat,t.lng)<15);
+  if(!tw.length){try{tw=(await overpass(towerQ(me[0],me[1],6000),6000)).map(towerPoint).filter(Boolean)}catch(e){}}
+  const t1=nearest(tw,me[0],me[1],t=>[t.lat,t.lng]);if(t1.x)nodes.push({t:'Nearest cell tower / mast',n:t1.x.tags.name||t1.x.tags.ref||'mast',co:t1.x.tags.operator||'operator unknown',p:[t1.x.lat,t1.x.lng],m:'radio / local access'});
+  const f1=nearest(D.facs,me[0],me[1],f=>[f.y,f.x]).x;nodes.push({t:'Nearest data centre',n:f1.n,co:f1.o,p:[f1.y,f1.x],m:'ISP backhaul fibre'});
+  seq.forEach(s=>{if(s.id==='E')return;const l=D.lpById[s.id];nodes.push({t:'Cable landing',n:l.n,co:s.via?`${D.meta[s.via].n} (${(D.meta[s.via].own||'').split(', ').slice(0,3).join(', ')})`:'terrestrial fibre',p:[l.y,l.x],m:s.via?'submarine cable '+D.meta[s.via].n:'terrestrial fibre',via:s.via})});
+  const f2=nearest(D.facs,to[0],to[1],f=>[f.y,f.x]).x;nodes.push({t:'Destination data centre',n:f2.n,co:f2.o,p:[f2.y,f2.x],m:'terrestrial fibre'});
+  nodes.push({t:'Destination',n:name,co:'',p:to,m:'local fibre'});
+  const arcs=[];let total=0;const rows=[];
+  nodes.forEach((n,i)=>{if(!i)return;const a=nodes[i-1],d=hav(a.p[0],a.p[1],n.p[0],n.p[1]);total+=d;
+    const cab=n.via&&D.meta[n.via];const col=cab?(D.paths.find(p=>p.id===n.via)||{}).color||'#22d3ee':'#f6821f';
+    arcs.push({startLat:a.p[0],startLng:a.p[1],endLat:n.p[0],endLng:n.p[1],color:[col,'#ffffff'],stroke:.5,anim:2200,label:esc(n.m)});
+    rows.push(`<tr><td>${i}</td><td><b>${esc(n.t)}</b><br>${esc(n.n)}<br><span class="dim">${esc(n.co)}</span></td><td class="dim">${esc(n.m)}</td><td>${d.toFixed(0)} km</td></tr>`)});
+  S.simArcs=arcs;renderAll();
+  const first=nodes[0].p,mid=[(first[0]+to[0])/2,(first[1]+to[1])/2];fly(mid[0],mid[1],Math.min(3.5,Math.max(1.2,total/9000)));
+  out.innerHTML=`<table><tr><th>#</th><th>Node / company</th><th>Medium</th><th>Leg</th></tr>${rows.join('')}</table>
+   <div>Total ≈ <b>${total.toFixed(0)} km</b> of fibre · physical-minimum round trip ≈ <b>${(total*2/200).toFixed(0)} ms</b> (light in glass ≈ 200 km/ms)</div>
+   <div class="note">Illustrative: shows the real nearby buildings and cables a path <i>could</i> use. The exact route your packets take is decided by BGP between operators and is not public.</div>`;
+}
+$('simGo').onclick=simulate;$('simClear').onclick=()=>{S.simArcs=[];renderAll();$('simOut').textContent=''};
 
 /* ---------- helpers: encoding ---------- */
 const hexdump=u8=>{let o='';const n=Math.min(u8.length,512);for(let i=0;i<n;i+=16){const r=u8.slice(i,i+16);o+=i.toString(16).padStart(4,'0')+'  '+[...r].map(b=>b.toString(16).padStart(2,'0')).join(' ').padEnd(47)+'  '+[...r].map(b=>b>31&&b<127?String.fromCharCode(b):'.').join('')+'\n'}return o+(u8.length>n?`... (${u8.length-n} more bytes)`:'')};
@@ -228,7 +442,7 @@ function drawRoutes(){
       if(k>0)arcs.push({startLat:h[k-1].lat,startLng:h[k-1].lon,endLat:x.lat,endLng:x.lon,color:['#ffffff','#27e08a'],stroke:.6,anim:1800,label:`REAL traceroute hop ${h[k-1].ttl} → ${x.ttl}`})});
     const sv=S.trace.server;if(sv&&sv.lat!=null){pts.push({lat:sv.lat,lng:sv.lon,color:'#ff4d5e',size:.45,alt:.03,label:`<b>Trace server</b><br>${esc(sv.city||'')}`});
       if(h.length)arcs.push({startLat:sv.lat,startLng:sv.lon,endLat:h[0].lat,endLng:h[0].lon,color:['#ff4d5e','#ffffff'],stroke:.6,anim:1800,label:'traceroute origin'})}}
-  G.arcsData(arcs).pointsData(pts.concat(S.infraPts));
+  S.routeArcs=arcs;S.routePts=pts;renderAll();
 }
 function sendPacket(t,dir=1){
   const n=t.nodes;if(!n||n.length<2)return;const p=dir>0?n[0].p:n[n.length-1].p;pulse(p[0],p[1],dir>0?t.color:'#ffffff',dir>0?4:7);
@@ -370,6 +584,7 @@ async function boot(){
   setInterval(tick,5000);setInterval(securityCheck,60000);
 }
 $('btnLoc').onclick=()=>navigator.geolocation&&navigator.geolocation.getCurrentPosition(p=>{S.me.lat=p.coords.latitude;S.me.lon=p.coords.longitude;S.me.city='GPS position';fly(S.me.lat,S.me.lon,.5);drawRoutes();loadInfra()},e=>alert('Location denied: '+e.message));
+loadData();
 boot();
 </script>
 </body>
