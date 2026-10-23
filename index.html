@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HackMap - Live Internet Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{--bg:#070b12;--panel:#0d1420;--line:#1c2a3f;--txt:#d6e2f0;--dim:#7d90a8;--ok:#27e08a;--warn:#ffc233;--bad:#ff4d5e;--acc:#38bdf8;--acc2:#a78bfa}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+#app{display:grid;grid-template-columns:1fr 440px;grid-template-rows:auto 1fr;height:100%}
+header{grid-column:1/3;display:flex;gap:14px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+header h1{font-size:15px;margin:0;letter-spacing:.12em;color:var(--acc)}
+.pill{padding:2px 9px;border:1px solid var(--line);border-radius:99px;color:var(--dim)}
+.pill b{color:var(--txt);font-weight:600}
+.live{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px;animation:p 1.2s infinite}
+@keyframes p{50%{opacity:.2}}
+#map{height:100%;background:#05080d}
+aside{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+nav{display:flex;border-bottom:1px solid var(--line)}
+nav button{flex:1;background:none;border:0;color:var(--dim);padding:10px 4px;cursor:pointer;font:inherit;border-bottom:2px solid transparent}
+nav button.on{color:var(--acc);border-color:var(--acc)}
+section{display:none;padding:12px;overflow:auto;flex:1}
+section.on{display:block}
+h2{font-size:12px;margin:14px 0 6px;color:var(--acc2);text-transform:uppercase;letter-spacing:.1em}
+h2:first-child{margin-top:0}
+table{width:100%;border-collapse:collapse}
+td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--dim);font-weight:500}
+pre{margin:0;white-space:pre-wrap;word-break:break-all;background:#060a11;border:1px solid var(--line);padding:8px;border-radius:6px;max-height:190px;overflow:auto;color:#9fe3ff}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.dim{color:var(--dim)}
+.score{font-size:42px;font-weight:700;line-height:1}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0 10px}
+.bar i{display:block;height:100%;transition:width .6s}
+input,button.go,select{background:#060a11;border:1px solid var(--line);color:var(--txt);padding:6px 8px;border-radius:6px;font:inherit}
+input{width:100%}
+button.go{cursor:pointer;color:var(--acc);margin-top:6px}
+.note{color:var(--dim);font-size:11.5px;border-left:2px solid var(--line);padding-left:8px;margin:8px 0}
+.spark{width:90px;height:20px;vertical-align:middle}
+.pkt{background:#fff;border-radius:50%;box-shadow:0 0 10px 3px var(--c,#38bdf8)}
+.leaflet-container{font:inherit}
+.leaflet-tooltip{background:#0d1420;color:#d6e2f0;border:1px solid #1c2a3f}
+@media(max-width:900px){#app{grid-template-columns:1fr;grid-template-rows:auto 45vh 1fr}header{grid-column:1}aside{border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div id="app">
+<header>
+  <h1>HACKMAP // LIVE INTERNET MAP</h1>
+  <span class="pill"><span class="live"></span><b id="hStatus">starting</b></span>
+  <span class="pill">IP <b id="hIp">-</b></span>
+  <span class="pill">ISP <b id="hIsp">-</b></span>
+  <span class="pill">Edge <b id="hEdge">-</b></span>
+  <span class="pill">Security <b id="hSec">-</b></span>
+  <button class="go" id="btnLoc" style="margin:0">Use precise GPS location</button>
+</header>
+<div id="map"></div>
+<aside>
+  <nav>
+    <button data-t="route" class="on">Route</button>
+    <button data-t="signal">Signal</button>
+    <button data-t="sec">Security</button>
+    <button data-t="infra">Infra</button>
+  </nav>
+  <section id="t-route" class="on">
+    <h2>Live route to targets</h2>
+    <table id="routeTbl"><tr><th>Target</th><th>RTT</th><th>Jitter</th><th>Loss</th><th></th></tr></table>
+    <h2>Path hops (selected)</h2>
+    <table id="hopTbl"></table>
+    <div class="note">Browsers cannot run a real traceroute (no raw ICMP/TTL access). Measured: your IP/ISP/ASN, the real Cloudflare edge you hit, real server IPs (via DNS), and real round-trip times. The intermediate lines are an <b>inferred</b> path between those measured points, drawn dashed.</div>
+  </section>
+  <section id="t-signal">
+    <h2>Live probe: raw bytes on the wire</h2>
+    <select id="probeSel"></select>
+    <div class="dim" id="probeMeta" style="margin-top:6px"></div>
+    <h2>Request sent</h2><pre id="sigReq"></pre>
+    <h2>Response headers</h2><pre id="sigHdr"></pre>
+    <h2>Response body - hex dump (encoded)</h2><pre id="sigHex"></pre>
+    <h2>Response body - base64</h2><pre id="sigB64"></pre>
+    <h2>Response body - decoded (UTF-8)</h2><pre id="sigTxt"></pre>
+    <h2>DNS packet encoder / decoder (real DNS-over-HTTPS)</h2>
+    <input id="dnsName" value="github.com" spellcheck="false">
+    <button class="go" id="dnsGo">Encode, send, decode</button>
+    <h2>Query bytes (encoded)</h2><pre id="dnsQ"></pre>
+    <h2>Answer bytes (encoded)</h2><pre id="dnsA"></pre>
+    <h2>Answer decoded</h2><pre id="dnsD"></pre>
+    <h2>Text codec</h2>
+    <input id="codecIn" value="hello internet" spellcheck="false">
+    <pre id="codecOut"></pre>
+  </section>
+  <section id="t-sec">
+    <div class="score" id="secScore">-</div>
+    <div class="bar"><i id="secBar" style="width:0"></i></div>
+    <table id="secTbl"></table>
+    <div class="note">This is a client-side health check of <i>your connection</i> from inside a browser. It cannot see certificates of arbitrary hosts, packet captures, or attacks upstream. Treat it as an indicator, not an audit.</div>
+  </section>
+  <section id="t-infra">
+    <h2>Infrastructure near you</h2>
+    <div id="infraSum" class="dim">locating...</div>
+    <table id="infraTbl"></table>
+    <div class="note">Data: OpenStreetMap telecom features (data centres, exchanges, communication masts) via Overpass, plus Cloudflare edge sites. OSM coverage varies by area.</div>
+  </section>
+</aside>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const fetchT=(u,o={},ms=8000)=>{const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);return fetch(u,{...o,signal:c.signal}).finally(()=>clearTimeout(t))};
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('section').forEach(s=>s.classList.toggle('on',s.id==='t-'+b.dataset.t));
+});
+
+/* ---------- map ---------- */
+const map=L.map('map',{worldCopyJump:true,zoomControl:true}).setView([20,0],2);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'&copy; OpenStreetMap, &copy; CARTO',maxZoom:18}).addTo(map);
+const layers={route:L.layerGroup().addTo(map),infra:L.layerGroup().addTo(map),pkt:L.layerGroup().addTo(map)};
+
+/* Cloudflare edge sites (IATA -> lat,lon), the ones a visitor is most likely to hit */
+const COLO={AMS:[52.31,4.76],ATL:[33.64,-84.43],BKK:[13.69,100.75],BOM:[19.09,72.87],BOS:[42.36,-71.01],BRU:[50.9,4.48],CDG:[49.01,2.55],CGK:[-6.13,106.66],CPH:[55.62,12.65],DEL:[28.56,77.1],DEN:[39.86,-104.67],DFW:[32.9,-97.04],DUB:[53.42,-6.27],DXB:[25.25,55.36],EWR:[40.69,-74.17],FRA:[50.04,8.56],GRU:[-23.43,-46.47],HKG:[22.31,113.91],HND:[35.55,139.78],IAD:[38.95,-77.45],ICN:[37.46,126.44],IST:[41.26,28.74],JNB:[-26.14,28.25],KUL:[2.74,101.7],LAX:[33.94,-118.41],LHR:[51.47,-0.45],MAD:[40.47,-3.56],MAN:[53.35,-2.27],MEL:[-37.67,144.84],MIA:[25.79,-80.29],MNL:[14.51,121.02],MRS:[43.44,5.22],MUC:[48.35,11.79],NRT:[35.77,140.39],ORD:[41.98,-87.9],OSL:[60.19,11.1],PER:[-31.94,115.97],SEA:[47.45,-122.31],SIN:[1.36,103.99],SJC:[37.36,-121.93],SYD:[-33.95,151.18],TPE:[25.08,121.23],VIE:[48.11,16.57],WAW:[52.17,20.97],YYZ:[43.68,-79.63],ZRH:[47.46,8.55],SCL:[-33.39,-70.79],MXP:[45.63,8.72],ARN:[59.65,17.93],HEL:[60.32,24.96],KIX:[34.43,135.23],CMB:[7.18,79.88],CCU:[22.65,88.45],MAA:[12.99,80.17],BLR:[13.2,77.71],HYD:[17.24,78.43],LOS:[6.58,3.32],NBO:[-1.32,36.93],CAI:[30.12,31.4],DOH:[25.27,51.61]};
+
+/* ---------- state ---------- */
+const S={me:null,cf:null,targets:[],sel:0,probes:{},sec:{},infra:[]};
+const TARGETS=[
+ {name:'Cloudflare',host:'one.one.one.one',url:'https://one.one.one.one/cdn-cgi/trace',cf:true,color:'#f6821f'},
+ {name:'Google DNS',host:'dns.google',url:'https://dns.google/resolve?name=example.com&type=A',color:'#4ade80'},
+ {name:'GitHub API',host:'api.github.com',url:'https://api.github.com/zen',color:'#a78bfa'},
+ {name:'Wikipedia',host:'en.wikipedia.org',url:'https://en.wikipedia.org/w/api.php?action=query&meta=siteinfo&format=json&origin=*',color:'#38bdf8'}
+];
+TARGETS.forEach(t=>{t.rtts=[];t.lost=0;t.sent=0;t.pos=null;t.ip=null;t.last=null;t.line=null});
+
+/* ---------- helpers: encoding ---------- */
+const hexdump=u8=>{let o='';const n=Math.min(u8.length,512);for(let i=0;i<n;i+=16){const r=u8.slice(i,i+16);o+=i.toString(16).padStart(4,'0')+'  '+[...r].map(b=>b.toString(16).padStart(2,'0')).join(' ').padEnd(47)+'  '+[...r].map(b=>b>31&&b<127?String.fromCharCode(b):'.').join('')+'\n'}return o+(u8.length>n?`... (${u8.length-n} more bytes)`:'')};
+const b64=u8=>{let s='';u8.forEach(b=>s+=String.fromCharCode(b));return btoa(s)};
+const b64url=u8=>b64(u8).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const ptRtt=a=>a.length?Math.round(a.reduce((x,y)=>x+y,0)/a.length):null;
+
+/* ---------- minimal DNS wire codec ---------- */
+function dnsEncode(name,type=1){
+  const id=Math.floor(Math.random()*65535);const parts=[];
+  parts.push(id>>8,id&255,1,0,0,1,0,0,0,0,0,0);
+  for(const l of name.split('.').filter(Boolean)){const e=new TextEncoder().encode(l);parts.push(e.length,...e)}
+  parts.push(0,0,type,0,1);return new Uint8Array(parts);
+}
+function dnsDecode(u8){
+  const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
+  const rd=(p)=>{const labels=[];let jumped=false,end=p,guard=0;while(guard++<40){const l=u8[p];if(l===0){p++;break}if((l&0xc0)===0xc0){if(!jumped)end=p+2;p=((l&0x3f)<<8)|u8[p+1];jumped=true;continue}labels.push(new TextDecoder().decode(u8.slice(p+1,p+1+l)));p+=l+1}return [labels.join('.'),jumped?end:p]};
+  const out={id:dv.getUint16(0),flags:dv.getUint16(2).toString(2).padStart(16,'0'),rcode:dv.getUint16(2)&15,qd:dv.getUint16(4),an:dv.getUint16(6),answers:[]};
+  let p=12;for(let i=0;i<out.qd;i++){const [,np]=rd(p);p=np+4}
+  for(let i=0;i<out.an;i++){const [n,np]=rd(p);p=np;const t=dv.getUint16(p),ttl=dv.getUint32(p+4),len=dv.getUint16(p+8);p+=10;
+    let d;if(t===1)d=[...u8.slice(p,p+4)].join('.');else if(t===28){const g=[];for(let k=0;k<16;k+=2)g.push(dv.getUint16(p+k).toString(16));d=g.join(':')}else if(t===5||t===2)d=rd(p)[0];else d=`type ${t}, ${len} bytes`;
+    out.answers.push({name:n,type:t,ttl,data:d});p+=len}
+  return out;
+}
+async function dohResolve(host,type=1){
+  const q=dnsEncode(host,type);
+  const t0=performance.now();
+  const r=await fetchT('https://dns.google/dns-query?dns='+b64url(q),{headers:{accept:'application/dns-message'}});
+  const a=new Uint8Array(await r.arrayBuffer());
+  return {q,a,ms:performance.now()-t0,msg:dnsDecode(a)};
+}
+$('dnsGo').onclick=async()=>{
+  const name=$('dnsName').value.trim()||'example.com';
+  try{const r=await dohResolve(name);
+    $('dnsQ').textContent=`${r.q.length} bytes\n`+hexdump(r.q);
+    $('dnsA').textContent=`${r.a.length} bytes  (${r.ms.toFixed(0)} ms)\n`+hexdump(r.a);
+    $('dnsD').textContent=JSON.stringify(r.msg,null,1);
+  }catch(e){$('dnsD').textContent='failed: '+e.message}
+};
+function codec(){const s=$('codecIn').value;const u=new TextEncoder().encode(s);
+  $('codecOut').textContent=`UTF-8 bytes : ${u.length}\nhex         : ${[...u].map(b=>b.toString(16).padStart(2,'0')).join(' ')}\nbinary      : ${[...u].map(b=>b.toString(2).padStart(8,'0')).join(' ')}\nbase64      : ${b64(u)}\nURL-encoded : ${encodeURIComponent(s)}\ndecoded     : ${new TextDecoder().decode(u)}`}
+$('codecIn').oninput=codec;codec();
+
+/* ---------- geo ---------- */
+async function geoIP(ip=''){
+  const r=await fetchT('https://ipwho.is/'+ip);const j=await r.json();
+  if(!j.success)throw new Error(j.message||'geo failed');
+  return {ip:j.ip,lat:j.latitude,lon:j.longitude,city:j.city,region:j.region,country:j.country,asn:j.connection&&j.connection.asn,org:(j.connection&&(j.connection.org||j.connection.isp))||'unknown',isp:j.connection&&j.connection.isp,type:j.type};
+}
+async function cfTrace(url='https://one.one.one.one/cdn-cgi/trace'){
+  const r=await fetchT(url+'?_='+Date.now());const txt=await r.text();const o={};txt.trim().split('\n').forEach(l=>{const i=l.indexOf('=');o[l.slice(0,i)]=l.slice(i+1)});return o;
+}
+
+/* ---------- map drawing ---------- */
+function arc(a,b,n=48){ // curved path between two lat/lon points
+  const mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2,dx=b[1]-a[1],dy=b[0]-a[0],d=Math.hypot(dx,dy)||1;
+  const c=[mx+(-dx/d)*d*0.18,my+(dy/d)*d*0.18];const pts=[];
+  for(let i=0;i<=n;i++){const t=i/n;pts.push([(1-t)*(1-t)*a[0]+2*(1-t)*t*c[0]+t*t*b[0],(1-t)*(1-t)*a[1]+2*(1-t)*t*c[1]+t*t*b[1]])}return pts;
+}
+function nodePath(t){ // you -> isp gateway -> (edge) -> server
+  const me=[S.me.lat,S.me.lon];const nodes=[{n:'You',p:me,kind:'measured',d:`${S.me.ip} · ${S.me.city||''}`}];
+  nodes.push({n:'ISP gateway',p:[me[0]+0.02,me[1]+0.02],kind:'measured (AS)',d:`${S.me.asn?'AS'+S.me.asn+' ':''}${S.me.org}`});
+  if(S.cf&&COLO[S.cf.colo]&&t.cf)nodes.push({n:'Cloudflare edge '+S.cf.colo,p:COLO[S.cf.colo],kind:'measured',d:`colo ${S.cf.colo}, ${S.cf.http||''}, ${S.cf.tls||''}`});
+  if(t.pos&&!t.cf)nodes.push({n:t.name+' server',p:t.pos,kind:'DNS+geo (registered)',d:`${t.ip||''}`});
+  return nodes;
+}
+function drawRoutes(){
+  layers.route.clearLayers();if(!S.me)return;
+  const me=[S.me.lat,S.me.lon];
+  L.circleMarker(me,{radius:7,color:'#27e08a',fillColor:'#27e08a',fillOpacity:.9}).bindTooltip(`YOU ${S.me.ip}<br>${S.me.org}`).addTo(layers.route);
+  TARGETS.forEach((t,i)=>{
+    const nodes=nodePath(t);t.nodes=nodes;t.path=[];
+    for(let k=0;k<nodes.length-1;k++){const seg=arc(nodes[k].p,nodes[k+1].p,k===0&&nodes.length>2?4:40);t.path.push(...seg)}
+    const sel=i===S.sel;
+    t.line=L.polyline(t.path,{color:t.color,weight:sel?2.5:1.2,opacity:sel?.9:.35,dashArray:'6 6'}).addTo(layers.route);
+    nodes.slice(1).forEach(nd=>L.circleMarker(nd.p,{radius:5,color:t.color,fillColor:'#05080d',fillOpacity:1,weight:2}).bindTooltip(`<b>${esc(nd.n)}</b><br>${esc(nd.d)}<br><i>${nd.kind}</i>`).addTo(layers.route));
+  });
+}
+/* packets: animate a glowing dot along a target's path */
+function sendPacket(t,dir=1,label=''){
+  if(!t.path||!t.path.length)return;
+  const m=L.marker(t.path[dir>0?0:t.path.length-1],{icon:L.divIcon({className:'',html:`<div class="pkt" style="--c:${dir>0?t.color:'#fff'};width:9px;height:9px;margin:-4px"></div>`,iconSize:[1,1]}),interactive:false}).addTo(layers.pkt);
+  const dur=900+Math.min(1500,(t.last||200)*4);const t0=performance.now();
+  (function step(now){const f=Math.min(1,(now-t0)/dur);const idx=Math.round((dir>0?f:1-f)*(t.path.length-1));m.setLatLng(t.path[idx]);
+    if(f<1)requestAnimationFrame(step);else layers.pkt.removeLayer(m)})(t0);
+}
+
+/* ---------- probing ---------- */
+async function probe(t){
+  t.sent++;const u=t.url+(t.url.includes('?')?'&':'?')+'_='+Date.now();
+  sendPacket(t,1);const t0=performance.now();
+  try{
+    const r=await fetchT(u,{cache:'no-store'});const buf=new Uint8Array(await r.arrayBuffer());const ms=performance.now()-t0;
+    t.rtts.push(ms);if(t.rtts.length>30)t.rtts.shift();t.last=ms;
+    const hdr=[];r.headers.forEach((v,k)=>hdr.push(`${k}: ${v}`));
+    S.probes[t.name]={u,status:r.status,hdr,buf,ms,when:new Date()};
+    setTimeout(()=>sendPacket(t,-1),ms/2);
+  }catch(e){t.lost++;t.last=null;S.probes[t.name]=Object.assign(S.probes[t.name]||{},{err:e.message})}
+}
+function jitter(a){if(a.length<2)return 0;let s=0;for(let i=1;i<a.length;i++)s+=Math.abs(a[i]-a[i-1]);return s/(a.length-1)}
+function spark(a){const w=90,h=20,m=Math.max(...a,1);return `<svg class="spark" viewBox="0 0 ${w} ${h}"><polyline fill="none" stroke="#38bdf8" stroke-width="1.5" points="${a.map((v,i)=>`${(i/(Math.max(a.length-1,1)))*w},${h-(v/m)*(h-2)-1}`).join(' ')}"/></svg>`}
+function renderRoute(){
+  $('routeTbl').innerHTML='<tr><th>Target</th><th>RTT</th><th>Jitter</th><th>Loss</th><th></th></tr>'+TARGETS.map((t,i)=>{
+    const rtt=ptRtt(t.rtts),loss=t.sent?Math.round(t.lost/t.sent*100):0;
+    return `<tr data-i="${i}" style="cursor:pointer;${i===S.sel?'background:#122033':''}"><td><span style="color:${t.color}">●</span> ${esc(t.name)}<br><span class="dim">${esc(t.ip||t.host)}</span></td><td class="${rtt==null?'dim':rtt<80?'ok':rtt<200?'warn':'bad'}">${rtt==null?'-':rtt+' ms'}</td><td>${jitter(t.rtts).toFixed(0)} ms</td><td class="${loss?'bad':'ok'}">${loss}%</td><td>${spark(t.rtts)}</td></tr>`}).join('');
+  $('routeTbl').querySelectorAll('tr[data-i]').forEach(r=>r.onclick=()=>{S.sel=+r.dataset.i;drawRoutes();renderRoute();renderHops();renderSignal()});
+  $('hStatus').textContent='live · '+new Date().toLocaleTimeString();
+}
+function renderHops(){
+  const t=TARGETS[S.sel];if(!t.nodes)return;
+  $('hopTbl').innerHTML='<tr><th>#</th><th>Node</th><th>Info</th><th>Source</th></tr>'+t.nodes.map((n,i)=>`<tr><td>${i}</td><td>${esc(n.n)}</td><td>${esc(n.d)}</td><td class="dim">${n.kind}</td></tr>`).join('');
+}
+function renderSignal(){
+  const sel=$('probeSel');if(!sel.options.length){TARGETS.forEach((t,i)=>sel.add(new Option(t.name,i)));sel.onchange=()=>{S.sel=+sel.value;drawRoutes();renderRoute();renderHops();renderSignal()}}
+  sel.value=S.sel;const t=TARGETS[S.sel],p=S.probes[t.name];if(!p||!p.buf){$('probeMeta').textContent=p&&p.err?'error: '+p.err:'waiting for probe...';return}
+  const url=new URL(p.u);
+  $('probeMeta').textContent=`HTTP ${p.status} · ${p.buf.length} bytes · ${p.ms.toFixed(0)} ms · ${p.when.toLocaleTimeString()}`;
+  $('sigReq').textContent=`GET ${url.pathname}${url.search} HTTP/1.1\nHost: ${url.host}\nAccept: */*\nCache-Control: no-store\nOrigin: ${location.origin}\n(sent over TLS: payload is encrypted on the wire;\n the bytes below are what arrives after decryption)`;
+  $('sigHdr').textContent=p.hdr.join('\n')||'(no headers exposed by CORS)';
+  $('sigHex').textContent=hexdump(p.buf);
+  $('sigB64').textContent=b64(p.buf.slice(0,600));
+  $('sigTxt').textContent=new TextDecoder().decode(p.buf.slice(0,1200));
+}
+
+/* ---------- security ---------- */
+async function webrtcIps(){
+  return new Promise(res=>{const found=new Set();let pc;try{pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]})}catch(e){return res(null)}
+    pc.createDataChannel('x');pc.onicecandidate=e=>{if(!e.candidate){pc.close();return res([...found])}const m=/(\d+\.\d+\.\d+\.\d+|[0-9a-f:]{6,})\s+\d+\s+typ\s+(\w+)/i.exec(e.candidate.candidate);if(m)found.add(m[1]+'|'+m[2])};
+    pc.createOffer().then(o=>pc.setLocalDescription(o)).catch(()=>res(null));setTimeout(()=>{try{pc.close()}catch(e){}res([...found])},4000)});
+}
+const isPriv=ip=>/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|fe80|fc|fd)/i.test(ip);
+async function securityCheck(){
+  const C=[];const add=(name,w,state,detail)=>C.push({name,w,state,detail});
+  add('Page loaded over HTTPS',10,location.protocol==='https:'?1:0,location.protocol);
+  const cf=S.cf||{};
+  const tls=cf.tls||'unknown';add('TLS version',20,tls==='TLSv1.3'?1:tls==='TLSv1.2'?.7:0,tls);
+  const http=cf.http||'unknown';add('HTTP protocol',10,/3|2/.test(http)?1:.5,http);
+  let doh='fail';try{const r=await dohResolve('example.com');doh=r.msg.answers.length?'ok '+r.ms.toFixed(0)+' ms':'empty'}catch(e){}
+  add('Encrypted DNS (DoH) reachable',10,doh.startsWith('ok')?1:0,doh);
+  const vpn=cf.warp&&cf.warp!=='off'||cf.gateway==='on';add('VPN / WARP tunnel',10,vpn?1:.4,vpn?'active':'none detected (optional)');
+  // IP consistency across two independent services
+  let cons=.5,cd='n/a';try{const j=await geoIP();cons=j.ip===(cf.ip||j.ip)?1:0;cd=`ipwho ${j.ip} vs cloudflare ${cf.ip||'?'}`}catch(e){}
+  add('Same public IP on 2 services (no split proxy)',10,cons,cd);
+  const ips=await webrtcIps();
+  if(ips===null)add('WebRTC leak',10,.7,'WebRTC unavailable');
+  else{const pub=ips.filter(x=>x.endsWith('|srflx')).map(x=>x.split('|')[0]);const leak=pub.some(p=>cf.ip&&p!==cf.ip&&!isPriv(p));
+    add('WebRTC leak',10,leak?0:1,leak?'STUN IP differs from HTTP IP: '+pub.join(','):ips.length?'no public IP leak ('+ips.length+' candidates)':'no candidates')}
+  const all=TARGETS.filter(t=>t.sent>2);const loss=all.length?all.reduce((a,t)=>a+t.lost/t.sent,0)/all.length:0;
+  add('Packet loss',10,loss===0?1:loss<.1?.5:0,Math.round(loss*100)+'%');
+  const jit=all.length?all.reduce((a,t)=>a+jitter(t.rtts),0)/all.length:0;add('Latency stability (jitter)',5,jit<30?1:jit<100?.5:0,jit.toFixed(0)+' ms avg');
+  add('Browser privacy signal (GPC/DNT)',5,(navigator.globalPrivacyControl||navigator.doNotTrack==='1')?1:.4,navigator.globalPrivacyControl?'GPC on':navigator.doNotTrack==='1'?'DNT on':'off');
+  const tot=C.reduce((a,c)=>a+c.w,0),got=C.reduce((a,c)=>a+c.w*c.state,0),sc=Math.round(got/tot*100);
+  S.sec={C,sc};
+  const col=sc>=80?'ok':sc>=55?'warn':'bad';const cv={ok:'var(--ok)',warn:'var(--warn)',bad:'var(--bad)'}[col];
+  $('secScore').innerHTML=`<span class="${col}">${sc}</span><span class="dim" style="font-size:16px"> / 100</span>`;
+  $('secBar').style.width=sc+'%';$('secBar').style.background=cv;$('hSec').innerHTML=`<span class="${col}">${sc}/100</span>`;
+  $('secTbl').innerHTML=C.map(c=>`<tr><td class="${c.state>=.9?'ok':c.state>=.5?'warn':'bad'}">${c.state>=.9?'✔':c.state>=.5?'!':'✘'}</td><td>${esc(c.name)}</td><td class="dim">${esc(c.detail)}</td></tr>`).join('');
+}
+
+/* ---------- infrastructure ---------- */
+async function loadInfra(){
+  layers.infra.clearLayers();const {lat,lon}=S.me;
+  const colos=Object.entries(COLO).map(([k,p])=>({k,p,d:hav(lat,lon,p[0],p[1])})).sort((a,b)=>a.d-b.d);
+  colos.slice(0,8).forEach((c,i)=>L.circleMarker(c.p,{radius:5,color:'#f6821f',fillOpacity:.7}).bindTooltip(`Cloudflare edge ${c.k} · ${c.d.toFixed(0)} km`).addTo(layers.infra));
+  const R=15000;const q=`[out:json][timeout:20];(nwr(around:${R},${lat},${lon})["telecom"~"data_center|exchange|connection_point"];nwr(around:${R},${lat},${lon})["man_made"="mast"]["tower:type"="communication"];nwr(around:${R},${lat},${lon})["man_made"="communications_tower"];);out center 150;`;
+  let els=[];
+  for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
+    try{const r=await fetchT(ep,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'content-type':'application/x-www-form-urlencoded'}},25000);els=(await r.json()).elements||[];break}catch(e){}}
+  const kinds={};els.forEach(e=>{const p=e.center?[e.center.lat,e.center.lon]:[e.lat,e.lon];if(p[0]==null)return;const tg=e.tags||{};
+    const k=tg.telecom||(tg['man_made']==='mast'?'comm mast':'comm tower');kinds[k]=(kinds[k]||0)+1;
+    const c=k==='data_center'?'#a78bfa':k==='exchange'?'#38bdf8':k==='connection_point'?'#27e08a':'#ffc233';
+    L.circleMarker(p,{radius:4,color:c,fillColor:c,fillOpacity:.8,weight:1}).bindTooltip(`${k}${tg.name?': '+esc(tg.name):''}${tg.operator?'<br>'+esc(tg.operator):''}`).addTo(layers.infra)});
+  S.infra={colos,kinds,n:els.length};
+  $('infraSum').innerHTML=`${els.length} mapped telecom sites within ${R/1000} km of your location.`;
+  $('infraTbl').innerHTML='<tr><th>Type</th><th>Count</th></tr>'+Object.entries(kinds).map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('')+
+   '<tr><th colspan=2>Nearest Cloudflare edges</th></tr>'+colos.slice(0,5).map(c=>`<tr><td>${c.k}</td><td>${c.d.toFixed(0)} km</td></tr>`).join('');
+}
+function hav(a,b,c,d){const r=x=>x*Math.PI/180,dl=r(c-a),dn=r(d-b),h=Math.sin(dl/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(dn/2)**2;return 12742*Math.asin(Math.sqrt(h))}
+
+/* ---------- boot ---------- */
+async function resolveTargets(){
+  await Promise.all(TARGETS.map(async t=>{try{
+    if(t.cf){t.pos=null;t.ip=S.cf&&S.cf.ip?'edge '+(S.cf.colo||''):null;return}
+    const r=await dohResolve(t.host);const a=r.msg.answers.find(x=>x.type===1);if(!a)return;t.ip=a.data;
+    const g=await geoIP(a.data);t.pos=[g.lat,g.lon];t.org=g.org}catch(e){}}));
+}
+async function boot(){
+  $('hStatus').textContent='locating you...';
+  try{S.me=await geoIP()}catch(e){$('hStatus').textContent='geo lookup failed - '+e.message;return}
+  try{S.cf=await cfTrace()}catch(e){S.cf=null}
+  $('hIp').textContent=S.me.ip;$('hIsp').textContent=(S.me.asn?'AS'+S.me.asn+' ':'')+S.me.org;$('hEdge').textContent=S.cf?S.cf.colo+' ('+(S.cf.http||'')+')':'n/a';
+  map.setView([S.me.lat,S.me.lon],5);
+  await resolveTargets();drawRoutes();renderHops();
+  loadInfra();
+  const tick=async()=>{await Promise.all(TARGETS.map(probe));renderRoute();renderSignal()};
+  await tick();securityCheck();
+  setInterval(tick,5000);setInterval(securityCheck,60000);
+}
+$('btnLoc').onclick=()=>navigator.geolocation&&navigator.geolocation.getCurrentPosition(p=>{S.me.lat=p.coords.latitude;S.me.lon=p.coords.longitude;S.me.city='GPS position';map.setView([S.me.lat,S.me.lon],11);drawRoutes();loadInfra()},e=>alert('Location denied: '+e.message));
+boot();
+</script>
+</body>
+</html>
