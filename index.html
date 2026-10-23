@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>HackMap - Live Internet Map</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
 :root{--bg:#070b12;--panel:#0d1420;--line:#1c2a3f;--txt:#d6e2f0;--dim:#7d90a8;--ok:#27e08a;--warn:#ffc233;--bad:#ff4d5e;--acc:#38bdf8;--acc2:#a78bfa}
 *{box-sizing:border-box}
@@ -38,9 +37,8 @@ input{width:100%}
 button.go{cursor:pointer;color:var(--acc);margin-top:6px}
 .note{color:var(--dim);font-size:11.5px;border-left:2px solid var(--line);padding-left:8px;margin:8px 0}
 .spark{width:90px;height:20px;vertical-align:middle}
-.pkt{background:#fff;border-radius:50%;box-shadow:0 0 10px 3px var(--c,#38bdf8)}
-.leaflet-container{font:inherit}
-.leaflet-tooltip{background:#0d1420;color:#d6e2f0;border:1px solid #1c2a3f}
+#map{overflow:hidden;position:relative}
+.gtip{background:#0d1420;color:#d6e2f0;border:1px solid #1c2a3f;padding:6px 8px;border-radius:6px;font:12px/1.4 ui-monospace,monospace}
 @media(max-width:900px){#app{grid-template-columns:1fr;grid-template-rows:auto 45vh 1fr}header{grid-column:1}aside{border-left:0;border-top:1px solid var(--line)}}
 </style>
 </head>
@@ -54,6 +52,7 @@ button.go{cursor:pointer;color:var(--acc);margin-top:6px}
   <span class="pill">Edge <b id="hEdge">-</b></span>
   <span class="pill">Security <b id="hSec">-</b></span>
   <button class="go" id="btnLoc" style="margin:0">Use precise GPS location</button>
+  <button class="go" id="btnSpin" style="margin:0">Auto-rotate: on</button>
 </header>
 <div id="map"></div>
 <aside>
@@ -68,6 +67,9 @@ button.go{cursor:pointer;color:var(--acc);margin-top:6px}
     <table id="routeTbl"><tr><th>Target</th><th>RTT</th><th>Jitter</th><th>Loss</th><th></th></tr></table>
     <h2>Path hops (selected)</h2>
     <table id="hopTbl"></table>
+    <h2>Real traceroute (backend → you)</h2>
+    <div id="traceMeta" class="dim">backend not configured</div>
+    <table id="traceTbl"></table>
     <div class="note">Browsers cannot run a real traceroute (no raw ICMP/TTL access). Measured: your IP/ISP/ASN, the real Cloudflare edge you hit, real server IPs (via DNS), and real round-trip times. The intermediate lines are an <b>inferred</b> path between those measured points, drawn dashed.</div>
   </section>
   <section id="t-signal">
@@ -103,7 +105,8 @@ button.go{cursor:pointer;color:var(--acc);margin-top:6px}
   </section>
 </aside>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/globe.gl@2.45.0/dist/globe.gl.min.js"></script>
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
@@ -117,16 +120,33 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('section').forEach(s=>s.classList.toggle('on',s.id==='t-'+b.dataset.t));
 });
 
-/* ---------- map ---------- */
-const map=L.map('map',{worldCopyJump:true,zoomControl:true}).setView([20,0],2);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'&copy; OpenStreetMap, &copy; CARTO',maxZoom:18}).addTo(map);
-const layers={route:L.layerGroup().addTo(map),infra:L.layerGroup().addTo(map),pkt:L.layerGroup().addTo(map)};
+/* ---------- 3D globe ---------- */
+const IMG='https://cdn.jsdelivr.net/npm/three-globe@2.45.0/example/img/';
+const mapEl=$('map');
+const G=Globe()(mapEl)
+  .globeImageUrl(IMG+'earth-night.jpg').bumpImageUrl(IMG+'earth-topology.png').backgroundImageUrl(IMG+'night-sky.png')
+  .atmosphereColor('#38bdf8').atmosphereAltitude(.18)
+  .arcColor('color').arcStroke('stroke').arcAltitudeAutoScale(.35)
+  .arcDashLength(.35).arcDashGap(.15).arcDashAnimateTime(d=>d.anim||2500)
+  .arcLabel(d=>d.label||'')
+  .pointColor('color').pointAltitude(d=>d.alt||.01).pointRadius('size').pointLabel(d=>`<div class="gtip">${d.label}</div>`)
+  .ringColor(d=>t=>{const c=d.color||'#38bdf8';return c+Math.round((1-t)*255).toString(16).padStart(2,'0')})
+  .ringMaxRadius('r').ringPropagationSpeed(2.2).ringRepeatPeriod(0);
+G.controls().autoRotate=true;G.controls().autoRotateSpeed=.45;
+function sizeGlobe(){G.width(mapEl.clientWidth).height(mapEl.clientHeight)}
+addEventListener('resize',sizeGlobe);sizeGlobe();
+$('btnSpin').onclick=()=>{const c=G.controls();c.autoRotate=!c.autoRotate;$('btnSpin').textContent='Auto-rotate: '+(c.autoRotate?'on':'off')};
+mapEl.addEventListener('pointerdown',()=>{G.controls().autoRotate=false;$('btnSpin').textContent='Auto-rotate: off'});
+let rings=[];
+function pulse(lat,lng,color='#38bdf8',r=6){const o={lat,lng,color,r};rings.push(o);G.ringsData(rings);setTimeout(()=>{rings=rings.filter(x=>x!==o);G.ringsData(rings)},2600)}
+const fly=(lat,lng,alt=1.8)=>G.pointOfView({lat,lng,altitude:alt},1200);
 
 /* Cloudflare edge sites (IATA -> lat,lon), the ones a visitor is most likely to hit */
 const COLO={AMS:[52.31,4.76],ATL:[33.64,-84.43],BKK:[13.69,100.75],BOM:[19.09,72.87],BOS:[42.36,-71.01],BRU:[50.9,4.48],CDG:[49.01,2.55],CGK:[-6.13,106.66],CPH:[55.62,12.65],DEL:[28.56,77.1],DEN:[39.86,-104.67],DFW:[32.9,-97.04],DUB:[53.42,-6.27],DXB:[25.25,55.36],EWR:[40.69,-74.17],FRA:[50.04,8.56],GRU:[-23.43,-46.47],HKG:[22.31,113.91],HND:[35.55,139.78],IAD:[38.95,-77.45],ICN:[37.46,126.44],IST:[41.26,28.74],JNB:[-26.14,28.25],KUL:[2.74,101.7],LAX:[33.94,-118.41],LHR:[51.47,-0.45],MAD:[40.47,-3.56],MAN:[53.35,-2.27],MEL:[-37.67,144.84],MIA:[25.79,-80.29],MNL:[14.51,121.02],MRS:[43.44,5.22],MUC:[48.35,11.79],NRT:[35.77,140.39],ORD:[41.98,-87.9],OSL:[60.19,11.1],PER:[-31.94,115.97],SEA:[47.45,-122.31],SIN:[1.36,103.99],SJC:[37.36,-121.93],SYD:[-33.95,151.18],TPE:[25.08,121.23],VIE:[48.11,16.57],WAW:[52.17,20.97],YYZ:[43.68,-79.63],ZRH:[47.46,8.55],SCL:[-33.39,-70.79],MXP:[45.63,8.72],ARN:[59.65,17.93],HEL:[60.32,24.96],KIX:[34.43,135.23],CMB:[7.18,79.88],CCU:[22.65,88.45],MAA:[12.99,80.17],BLR:[13.2,77.71],HYD:[17.24,78.43],LOS:[6.58,3.32],NBO:[-1.32,36.93],CAI:[30.12,31.4],DOH:[25.27,51.61]};
 
 /* ---------- state ---------- */
-const S={me:null,cf:null,targets:[],sel:0,probes:{},sec:{},infra:[]};
+const S={me:null,cf:null,edge:null,trace:null,targets:[],sel:0,probes:{},sec:{},infra:[],infraPts:[]};
+const CFG=window.HACKMAP||{};
 const TARGETS=[
  {name:'Cloudflare',host:'one.one.one.one',url:'https://one.one.one.one/cdn-cgi/trace',cf:true,color:'#f6821f'},
  {name:'Google DNS',host:'dns.google',url:'https://dns.google/resolve?name=example.com&type=A',color:'#4ade80'},
@@ -188,11 +208,6 @@ async function cfTrace(url='https://one.one.one.one/cdn-cgi/trace'){
 }
 
 /* ---------- map drawing ---------- */
-function arc(a,b,n=48){ // curved path between two lat/lon points
-  const mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2,dx=b[1]-a[1],dy=b[0]-a[0],d=Math.hypot(dx,dy)||1;
-  const c=[mx+(-dx/d)*d*0.18,my+(dy/d)*d*0.18];const pts=[];
-  for(let i=0;i<=n;i++){const t=i/n;pts.push([(1-t)*(1-t)*a[0]+2*(1-t)*t*c[0]+t*t*b[0],(1-t)*(1-t)*a[1]+2*(1-t)*t*c[1]+t*t*b[1]])}return pts;
-}
 function nodePath(t){ // you -> isp gateway -> (edge) -> server
   const me=[S.me.lat,S.me.lon];const nodes=[{n:'You',p:me,kind:'measured',d:`${S.me.ip} · ${S.me.city||''}`}];
   nodes.push({n:'ISP gateway',p:[me[0]+0.02,me[1]+0.02],kind:'measured (AS)',d:`${S.me.asn?'AS'+S.me.asn+' ':''}${S.me.org}`});
@@ -201,24 +216,22 @@ function nodePath(t){ // you -> isp gateway -> (edge) -> server
   return nodes;
 }
 function drawRoutes(){
-  layers.route.clearLayers();if(!S.me)return;
-  const me=[S.me.lat,S.me.lon];
-  L.circleMarker(me,{radius:7,color:'#27e08a',fillColor:'#27e08a',fillOpacity:.9}).bindTooltip(`YOU ${S.me.ip}<br>${S.me.org}`).addTo(layers.route);
+  if(!S.me)return;
+  const arcs=[],pts=[{lat:S.me.lat,lng:S.me.lon,color:'#27e08a',size:.6,alt:.02,label:`<b>YOU</b> ${esc(S.me.ip)}<br>${esc(S.me.org)}`}];
   TARGETS.forEach((t,i)=>{
-    const nodes=nodePath(t);t.nodes=nodes;t.path=[];
-    for(let k=0;k<nodes.length-1;k++){const seg=arc(nodes[k].p,nodes[k+1].p,k===0&&nodes.length>2?4:40);t.path.push(...seg)}
-    const sel=i===S.sel;
-    t.line=L.polyline(t.path,{color:t.color,weight:sel?2.5:1.2,opacity:sel?.9:.35,dashArray:'6 6'}).addTo(layers.route);
-    nodes.slice(1).forEach(nd=>L.circleMarker(nd.p,{radius:5,color:t.color,fillColor:'#05080d',fillOpacity:1,weight:2}).bindTooltip(`<b>${esc(nd.n)}</b><br>${esc(nd.d)}<br><i>${nd.kind}</i>`).addTo(layers.route));
+    const nodes=nodePath(t);t.nodes=nodes;const sel=i===S.sel;
+    for(let k=0;k<nodes.length-1;k++)arcs.push({startLat:nodes[k].p[0],startLng:nodes[k].p[1],endLat:nodes[k+1].p[0],endLng:nodes[k+1].p[1],color:[t.color+(sel?'ff':'55'),t.color+(sel?'ff':'55')],stroke:sel?.5:.2,anim:1200+Math.min(3000,(t.last||300)*8),label:`${esc(t.name)}: ${esc(nodes[k].n)} → ${esc(nodes[k+1].n)} (inferred)`});
+    nodes.slice(1).forEach(nd=>pts.push({lat:nd.p[0],lng:nd.p[1],color:t.color,size:.35,alt:.02,label:`<b>${esc(nd.n)}</b><br>${esc(nd.d)}<br><i>${nd.kind}</i>`}));
   });
+  if(S.trace&&S.trace.hops){const h=S.trace.hops.filter(x=>x.lat!=null);
+    h.forEach((x,k)=>{pts.push({lat:x.lat,lng:x.lon,color:'#ffffff',size:.28,alt:.03,label:`<b>hop ${x.ttl}</b> ${esc(x.ip)}<br>${esc(x.org||'')} ${x.asn?'AS'+x.asn:''}<br>${x.rtt!=null?x.rtt+' ms':''} ${esc(x.city||'')}`});
+      if(k>0)arcs.push({startLat:h[k-1].lat,startLng:h[k-1].lon,endLat:x.lat,endLng:x.lon,color:['#ffffff','#27e08a'],stroke:.6,anim:1800,label:`REAL traceroute hop ${h[k-1].ttl} → ${x.ttl}`})});
+    const sv=S.trace.server;if(sv&&sv.lat!=null){pts.push({lat:sv.lat,lng:sv.lon,color:'#ff4d5e',size:.45,alt:.03,label:`<b>Trace server</b><br>${esc(sv.city||'')}`});
+      if(h.length)arcs.push({startLat:sv.lat,startLng:sv.lon,endLat:h[0].lat,endLng:h[0].lon,color:['#ff4d5e','#ffffff'],stroke:.6,anim:1800,label:'traceroute origin'})}}
+  G.arcsData(arcs).pointsData(pts.concat(S.infraPts));
 }
-/* packets: animate a glowing dot along a target's path */
-function sendPacket(t,dir=1,label=''){
-  if(!t.path||!t.path.length)return;
-  const m=L.marker(t.path[dir>0?0:t.path.length-1],{icon:L.divIcon({className:'',html:`<div class="pkt" style="--c:${dir>0?t.color:'#fff'};width:9px;height:9px;margin:-4px"></div>`,iconSize:[1,1]}),interactive:false}).addTo(layers.pkt);
-  const dur=900+Math.min(1500,(t.last||200)*4);const t0=performance.now();
-  (function step(now){const f=Math.min(1,(now-t0)/dur);const idx=Math.round((dir>0?f:1-f)*(t.path.length-1));m.setLatLng(t.path[idx]);
-    if(f<1)requestAnimationFrame(step);else layers.pkt.removeLayer(m)})(t0);
+function sendPacket(t,dir=1){
+  const n=t.nodes;if(!n||n.length<2)return;const p=dir>0?n[0].p:n[n.length-1].p;pulse(p[0],p[1],dir>0?t.color:'#ffffff',dir>0?4:7);
 }
 
 /* ---------- probing ---------- */
@@ -258,6 +271,26 @@ function renderSignal(){
   $('sigTxt').textContent=new TextDecoder().decode(p.buf.slice(0,1200));
 }
 
+/* ---------- backend: edge info (Cloudflare Worker) + real traceroute (server) ---------- */
+async function loadEdge(){
+  if(!CFG.INFO_API)return;
+  try{const r=await fetchT(CFG.INFO_API.replace(/\/$/,'')+'/info');S.edge=await r.json();
+    if(S.edge.lat!=null&&!S.gps){S.me.lat=S.edge.lat;S.me.lon=S.edge.lon}
+    if(S.edge.asn&&!S.me.asn)S.me.asn=S.edge.asn}catch(e){S.edge=null}
+}
+async function loadTrace(){
+  if(!CFG.TRACE_API){return}
+  $('traceMeta').textContent='running traceroute from backend to your IP (up to 40 s)...';
+  try{const r=await fetchT(CFG.TRACE_API.replace(/\/$/,'')+'/trace',{},60000);const j=await r.json();
+    if(j.error)throw new Error(j.error);S.trace=j;
+    $('traceMeta').innerHTML=`from <b>${esc((j.server&&j.server.city)||'backend')}</b> to <b>${esc(j.target)}</b> · ${j.hops.length} hops · ${new Date().toLocaleTimeString()}`;
+    $('traceTbl').innerHTML='<tr><th>#</th><th>Hop</th><th>RTT</th><th>Network</th></tr>'+j.hops.map(h=>`<tr><td>${h.ttl}</td><td>${h.ip?esc(h.ip):'<span class="dim">* no reply</span>'}<br><span class="dim">${esc(h.city||'')}</span></td><td>${h.rtt!=null?h.rtt+' ms':'-'}</td><td class="dim">${h.asn?'AS'+h.asn+' ':''}${esc(h.org||'')}</td></tr>`).join('');
+    drawRoutes();
+    const f=j.hops.find(h=>h.lat!=null);if(f)fly(f.lat,f.lon,2.2);
+    S.traceAt=Date.now();
+  }catch(e){$('traceMeta').innerHTML='<span class="bad">traceroute failed: '+esc(e.message)+'</span>'}
+}
+
 /* ---------- security ---------- */
 async function webrtcIps(){
   return new Promise(res=>{const found=new Set();let pc;try{pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]})}catch(e){return res(null)}
@@ -269,8 +302,10 @@ async function securityCheck(){
   const C=[];const add=(name,w,state,detail)=>C.push({name,w,state,detail});
   add('Page loaded over HTTPS',10,location.protocol==='https:'?1:0,location.protocol);
   const cf=S.cf||{};
-  const tls=cf.tls||'unknown';add('TLS version',20,tls==='TLSv1.3'?1:tls==='TLSv1.2'?.7:0,tls);
+  const tls=(S.edge&&S.edge.tls)||cf.tls||'unknown';add('TLS version',20,tls==='TLSv1.3'?1:tls==='TLSv1.2'?.7:0,tls);
   const http=cf.http||'unknown';add('HTTP protocol',10,/3|2/.test(http)?1:.5,http);
+  if(S.edge){add('Edge-observed TLS cipher',5,/GCM|CHACHA/i.test(S.edge.cipher||'')?1:.4,S.edge.cipher||'?');
+    add('Edge-observed TCP RTT',0,1,(S.edge.rtt!=null?S.edge.rtt+' ms':'n/a'))}
   let doh='fail';try{const r=await dohResolve('example.com');doh=r.msg.answers.length?'ok '+r.ms.toFixed(0)+' ms':'empty'}catch(e){}
   add('Encrypted DNS (DoH) reachable',10,doh.startsWith('ok')?1:0,doh);
   const vpn=cf.warp&&cf.warp!=='off'||cf.gateway==='on';add('VPN / WARP tunnel',10,vpn?1:.4,vpn?'active':'none detected (optional)');
@@ -295,9 +330,9 @@ async function securityCheck(){
 
 /* ---------- infrastructure ---------- */
 async function loadInfra(){
-  layers.infra.clearLayers();const {lat,lon}=S.me;
+  S.infraPts=[];const {lat,lon}=S.me;
   const colos=Object.entries(COLO).map(([k,p])=>({k,p,d:hav(lat,lon,p[0],p[1])})).sort((a,b)=>a.d-b.d);
-  colos.slice(0,8).forEach((c,i)=>L.circleMarker(c.p,{radius:5,color:'#f6821f',fillOpacity:.7}).bindTooltip(`Cloudflare edge ${c.k} · ${c.d.toFixed(0)} km`).addTo(layers.infra));
+  colos.slice(0,8).forEach(c=>S.infraPts.push({lat:c.p[0],lng:c.p[1],color:'#f6821f',size:.4,alt:.015,label:`Cloudflare edge ${c.k} · ${c.d.toFixed(0)} km`}));
   const R=15000;const q=`[out:json][timeout:20];(nwr(around:${R},${lat},${lon})["telecom"~"data_center|exchange|connection_point"];nwr(around:${R},${lat},${lon})["man_made"="mast"]["tower:type"="communication"];nwr(around:${R},${lat},${lon})["man_made"="communications_tower"];);out center 150;`;
   let els=[];
   for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
@@ -305,7 +340,8 @@ async function loadInfra(){
   const kinds={};els.forEach(e=>{const p=e.center?[e.center.lat,e.center.lon]:[e.lat,e.lon];if(p[0]==null)return;const tg=e.tags||{};
     const k=tg.telecom||(tg['man_made']==='mast'?'comm mast':'comm tower');kinds[k]=(kinds[k]||0)+1;
     const c=k==='data_center'?'#a78bfa':k==='exchange'?'#38bdf8':k==='connection_point'?'#27e08a':'#ffc233';
-    L.circleMarker(p,{radius:4,color:c,fillColor:c,fillOpacity:.8,weight:1}).bindTooltip(`${k}${tg.name?': '+esc(tg.name):''}${tg.operator?'<br>'+esc(tg.operator):''}`).addTo(layers.infra)});
+    S.infraPts.push({lat:p[0],lng:p[1],color:c,size:.18,alt:.01,label:`${k}${tg.name?': '+esc(tg.name):''}${tg.operator?'<br>'+esc(tg.operator):''}`})});
+  drawRoutes();
   S.infra={colos,kinds,n:els.length};
   $('infraSum').innerHTML=`${els.length} mapped telecom sites within ${R/1000} km of your location.`;
   $('infraTbl').innerHTML='<tr><th>Type</th><th>Count</th></tr>'+Object.entries(kinds).map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('')+
@@ -324,15 +360,16 @@ async function boot(){
   $('hStatus').textContent='locating you...';
   try{S.me=await geoIP()}catch(e){$('hStatus').textContent='geo lookup failed - '+e.message;return}
   try{S.cf=await cfTrace()}catch(e){S.cf=null}
+  await loadEdge();loadTrace();
   $('hIp').textContent=S.me.ip;$('hIsp').textContent=(S.me.asn?'AS'+S.me.asn+' ':'')+S.me.org;$('hEdge').textContent=S.cf?S.cf.colo+' ('+(S.cf.http||'')+')':'n/a';
-  map.setView([S.me.lat,S.me.lon],5);
+  fly(S.me.lat,S.me.lon,1.6);pulse(S.me.lat,S.me.lon,'#27e08a',8);
   await resolveTargets();drawRoutes();renderHops();
   loadInfra();
   const tick=async()=>{await Promise.all(TARGETS.map(probe));renderRoute();renderSignal()};
   await tick();securityCheck();
   setInterval(tick,5000);setInterval(securityCheck,60000);
 }
-$('btnLoc').onclick=()=>navigator.geolocation&&navigator.geolocation.getCurrentPosition(p=>{S.me.lat=p.coords.latitude;S.me.lon=p.coords.longitude;S.me.city='GPS position';map.setView([S.me.lat,S.me.lon],11);drawRoutes();loadInfra()},e=>alert('Location denied: '+e.message));
+$('btnLoc').onclick=()=>navigator.geolocation&&navigator.geolocation.getCurrentPosition(p=>{S.me.lat=p.coords.latitude;S.me.lon=p.coords.longitude;S.me.city='GPS position';fly(S.me.lat,S.me.lon,.5);drawRoutes();loadInfra()},e=>alert('Location denied: '+e.message));
 boot();
 </script>
 </body>
