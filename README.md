@@ -4,7 +4,7 @@
 raw byte inspector (hex/base64/DNS wire codec), connection security score, nearby telecom infrastructure,
 and (with the backend) a real traceroute.
 
-Works as a static site on GitHub Pages with no backend. Optional backends, set in `config.js`:
+Works as a static site on GitHub Pages (Settings → Pages → Deploy from branch → main, root) with no backend. Optional backends, set in `config.js`:
 
 ## 1. Edge info Worker (free) - `worker/`
     cd worker && npx wrangler deploy
