@@ -15,3 +15,8 @@ Traces from the server to the visitor's own IP only (rate limited, 1 per 20 s pe
     cd server && fly launch --copy-config --no-deploy && fly deploy
 Put the URL in `TRACE_API`. Set `ALLOW_ORIGIN` in `fly.toml` if the site origin differs.
 Any Docker host works (`server/Dockerfile`). This is the server-to-visitor path, not the visitor's outbound path.
+
+## Data
+`data/cables.json` (submarine cables, owners, landing stations: TeleGeography Submarine Cable Map, CC BY-NC-SA 3.0, non-commercial)
+and `data/facilities.json` (data centres/exchanges and their companies: PeeringDB) are static snapshots.
+Refresh with `node scripts/build-data.js`. Cell towers are loaded live from OpenStreetMap (Overpass) when zoomed in.
